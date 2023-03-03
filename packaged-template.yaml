@@ -1,0 +1,188 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: An example template with an IAM role for a Lambda state machine.
+Parameters:
+  LambdaFunctionRoleName:
+    Type: String
+    Description: Name of the lambda role
+    Default: Ec2-launch-detection-lambda-role
+  LambdaFunctionPolicyName:
+    Type: String
+    Description: Name of the lambda role
+    Default: Ec2-launch-detection-lambda-Policy
+  LambdaFunctionName:
+    Type: String
+    Description: Name of the lambda-Function-Name
+    Default: Ec2-launch-detection-lambda
+  EventBridgeRuleName:
+    Type: String
+    Description: Name of the EventBridge Rules
+    Default: Ec2-launch-detection-event-rule
+  StateMachineRoleName:
+    Type: String
+    Description: Name of the EventBridge Rules
+    Default: Statemachine-role-to-invokelambda
+  StateMachinrPolicyName:
+    Type: String
+    Description: Name of the EventBridge Rules
+    Default: Statemachine-policy-to-invokelambda
+  EventBridgeRuleRoleName:
+    Type: String
+    Description: Name of the EventBridge Rules
+    Default: Event-bridge-rule-to-invoke-statemachine
+  EventBridgeRulePolicyName:
+    Type: String
+    Description: Name of the EventBridge Rules
+    Default: Event-bridge-policy-to-invoke-statemachine
+  Statemachinename:
+    Type: String
+    Description: Name of the EventBridge Rules
+    Default: Ec2-State-Machine
+  SlackUrl:
+    Description: enter slack webhook to receive alerts
+    Type: String
+    Default: https://hooks.slack.com/services/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
+  TeamsUrl:
+    Description: enter teams webhook to receive alerts
+    Type: String
+    Default: https://cloudzenix.webhook.office.com/webhookb2/6b3ba5ea-708c-4629-9f20-7c1b09d46619@0ca8b1bf-7c75-4720-85bf-8569448da8a3/IncomingWebhook/f16a9d9f437c4b32b5d290dd3e529a72/e6dbaf6f-fc1e-47ac-b2cd-b59a44638d22
+Resources:
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Ref: LambdaFunctionRoleName
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service: lambda.amazonaws.com
+          Action: sts:AssumeRole
+      Policies:
+      - PolicyName:
+          Ref: LambdaFunctionPolicyName
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - logs:PutLogEvents
+            - logs:CreateLogGroup
+            - logs:CreateLogStream
+            - cloudtrail:StartLogging
+            - cloudtrail:StopLogging
+            - cloudtrail:GetTrail
+            - cloudtrail:GetTrailStatus
+            - cloudtrail:GetEventSelectors
+            Resource:
+            - arn:aws:logs:*:*:log-group:*
+            - arn:aws:cloudtrail:*:*:trail/*
+  Eventruleroleforstatemacine:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Ref: EventBridgeRuleRoleName
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - events.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: /
+      Policies:
+      - PolicyName:
+          Ref: EventBridgeRulePolicyName
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action: states:StartExecution
+            Resource: '*'
+  MyLambdaFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName:
+        Ref: LambdaFunctionName
+      Handler: ec2lambda.lambda_handler
+      Role:
+        Fn::GetAtt:
+        - LambdaExecutionRole
+        - Arn
+      Code:
+        S3Bucket: cfnbucketopssbx
+        S3Key: ed921a8017dd79f37235721627d5367f
+      Runtime: python3.7
+      Timeout: 600
+      Environment:
+        Variables:
+          slack_url:
+            Ref: SlackUrl
+          teams_url:
+            Ref: TeamsUrl
+  StatesExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName:
+        Ref: StateMachineRoleName
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - Fn::Sub: states.${AWS::Region}.amazonaws.com
+          Action: sts:AssumeRole
+      Path: /
+      Policies:
+      - PolicyName:
+          Ref: StateMachinrPolicyName
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - lambda:InvokeFunction
+            Resource: '*'
+  MyStateMachine:
+    Type: AWS::StepFunctions::StateMachine
+    Properties:
+      StateMachineName:
+        Ref: Statemachinename
+      DefinitionString:
+        Fn::Sub:
+        - "{\n  \"Comment\": \"A Hello World example using an AWS Lambda function\"\
+          ,\n  \"StartAt\": \"Wait\",\n  \"States\": {\n    \"Wait\": {\n      \"\
+          Type\": \"Wait\",\n      \"Seconds\": 200,\n      \"Next\": \"Ec2-Launch-alert-lambda\"\
+          \n      },\n      \"Ec2-Launch-alert-lambda\": {\n        \"Type\": \"Task\"\
+          ,\n      \"Resource\": \"${lambdaArn}\",\n      \"End\": true\n    }\n \
+          \ }\n}"
+        - lambdaArn:
+            Fn::GetAtt:
+            - MyLambdaFunction
+            - Arn
+      RoleArn:
+        Fn::GetAtt:
+        - StatesExecutionRole
+        - Arn
+  EventBridgeRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Rules to filtering events
+      Name:
+        Ref: EventBridgeRuleName
+      EventPattern: '{ "detail": { "eventSource": ["ec2.amazonaws.com"], "eventName":
+        ["RunInstances"] }, "source": ["aws.ec2"] }'
+      Targets:
+      - Arn:
+          Fn::GetAtt:
+          - MyStateMachine
+          - Arn
+        Id:
+          Ref: Statemachinename
+        RoleArn:
+          Fn::GetAtt:
+          - Eventruleroleforstatemacine
+          - Arn
